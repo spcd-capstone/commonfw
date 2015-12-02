@@ -179,7 +179,7 @@ void user_init(void)
     command_parser = parser_create();
 
     // set up baud rate
-    uart_div_modify(0, UART_CLK_FREQ / (115200));
+    uart_div_modify(0, UART_CLK_FREQ / (57600));
 
     // initialize GPIO
     gpio_init();
