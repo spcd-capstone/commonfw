@@ -15,18 +15,55 @@
 os_event_t    user_procTaskQueue[1];
 static void user_procTask(os_event_t *events);
 
+LOCAL os_timer_t broadcast_timer;
+
 struct espconn server_conn;
 clientListHead *client_list;
 esp_tcp server_tcp;
 parser *command_parser;
+
+char update_buffer[64];
+
+void broadcast_timer_fn(void *arg) {
+    struct ip_info station_ip;
+    int stat = wifi_station_get_connect_status();
+    if (stat != STATION_GOT_IP) {
+        return;
+    }
+    bool success = wifi_get_ip_info(STATION_IF, &station_ip);
+    if (!wifi_get_ip_info(STATION_IF, &station_ip))
+        return;
+
+    // calculate broadcast address
+    uint32 broadcastIp = station_ip.netmask.addr ^ 0xFFFFFFFF;
+    broadcastIp = station_ip.ip.addr | broadcastIp;
+
+    esp_udp udp_conf;
+    udp_conf.remote_port = BROADCAST_PORT;
+    udp_conf.local_port = 0;
+    os_memcpy(udp_conf.local_ip, &station_ip.ip.addr, 4);
+    os_memcpy(udp_conf.remote_ip, &broadcastIp, 4);
+
+    struct espconn conn;
+    os_memset(&conn, 0, sizeof(struct espconn));
+    conn.type = ESPCONN_UDP;
+    conn.state = ESPCONN_NONE;
+    conn.proto.udp = &udp_conf;
+    if (espconn_create(&conn) != ESPCONN_OK) {
+        return;
+    }
+
+    os_sprintf(update_buffer, "{ \"id\": %d, \"type\": \"" NODE_TYPE "\" }", system_get_chip_id());
+
+    espconn_send(&conn, update_buffer, os_strlen(update_buffer));
+    espconn_delete(&conn);
+}
 
 void server_recv_cb(void *arg, char *pdata, unsigned short len) {
     struct espconn *pConn = (struct espconn *)arg;
 
     int parsedInt;
     char parsedData[512];
-
-    //os_printf("recieved message of length: %d\n", len);
 
     if (len == 0) {
         return;
@@ -81,22 +118,22 @@ void client_disconnect_cb(void *arg) {
     if (res) {
     }
     else {
-        //os_printf("Client could not be removed from list!\n");
+        // error, this shouldn't happen
     }
 }
 
 ICACHE_FLASH_ATTR
 void start_server()
 {
-    //os_printf("Setting up server...\n");
-
+    // zero config structs
     os_memset(&server_conn, 0, sizeof(struct espconn));
     os_memset(&server_tcp, 0, sizeof(esp_tcp));
 
+    // configure TCP server connection settings
     server_conn.type = ESPCONN_TCP;
     server_conn.state = ESPCONN_NONE;
     server_conn.proto.tcp = &server_tcp;
-    server_tcp.local_port = LISTENPORT;
+    server_tcp.local_port = LISTEN_PORT;
 
     // register callbacks
     espconn_regist_recvcb(&server_conn, server_recv_cb);
@@ -111,15 +148,16 @@ void start_server()
     // set max clients
     espconn_tcp_set_max_con_allow(&server_conn, 4);
 
-    // done wait for connection
-    //os_printf("Server set up, starting...\n");
-
+    // create TCP listening port
     if (espconn_accept(&server_conn) != ESPCONN_OK) {
         //os_printf("Server failed to start. Error!\n");
         return;
     }
 
-    //os_printf("Server started, ready for connections...\n");
+    // set up broadcast timer
+    os_timer_disarm(&broadcast_timer);
+    os_timer_setfn(&broadcast_timer, &broadcast_timer_fn, 0);
+    os_timer_arm(&broadcast_timer, BROADCAST_INTERVAL, 1);
 }
 
 void wifi_callback(System_Event_t *evt)
@@ -128,9 +166,9 @@ void wifi_callback(System_Event_t *evt)
     {
         case EVENT_STAMODE_CONNECTED:
         {
-            //os_printf("connect to ssid %s, channel %d\n",
-//                        evt->event_info.connected.ssid,
-//                        evt->event_info.connected.channel);
+            os_printf("connect to ssid %s, channel %d\n",
+                        evt->event_info.connected.ssid,
+                        evt->event_info.connected.channel);
             break;
         }
 
@@ -147,11 +185,10 @@ void wifi_callback(System_Event_t *evt)
 
         case EVENT_STAMODE_GOT_IP:
         {
-            //os_printf("ip:" IPSTR ",mask:" IPSTR ",gw:" IPSTR,
- //                       IP2STR(&evt->event_info.got_ip.ip),
-  //                      IP2STR(&evt->event_info.got_ip.mask),
-   //                     IP2STR(&evt->event_info.got_ip.gw));
-            //os_printf("\n");
+            os_printf("ip:" IPSTR ",mask:" IPSTR ",gw:" IPSTR "\n",
+                IP2STR(&evt->event_info.got_ip.ip),
+                IP2STR(&evt->event_info.got_ip.mask),
+                IP2STR(&evt->event_info.got_ip.gw));
             start_server();
             break;
         }
@@ -179,33 +216,38 @@ void user_init(void)
     command_parser = parser_create();
 
     // set up baud rate
-    uart_div_modify(0, UART_CLK_FREQ / (57600));
+    uart_div_modify(0, UART_CLK_FREQ / (115200));
 
+    /*
     // initialize GPIO
     gpio_init();
     PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO2_U, FUNC_GPIO2);
     gpio_output_set(0, BIT2, BIT2, 0);
+    */
 
     // set up wifi options
     wifi_station_set_hostname("outlet");
     wifi_set_opmode_current(STATION_MODE);
 
     config.bssid_set = 0;
-    os_memcpy( &config.ssid, "haCapDemo", 32 );
-    os_memcpy( &config.password, "demopass", 64 );
+    os_memcpy( &config.ssid, WIFI_SSID, 32 );
+    os_memcpy( &config.password, WIFI_PASS, 64 );
     wifi_station_set_config(&config);
 
     // set up static ip for demo
     // TODO: remove this eventually
+    /*
     wifi_station_dhcpc_stop();
     struct ip_info info;
     IP4_ADDR(&info.ip, 192, 168, 43, 201);
     IP4_ADDR(&info.gw, 192, 168, 43, 1);
     IP4_ADDR(&info.netmask, 255, 255, 255, 0);
     wifi_set_ip_info(STATION_IF, &info);
+    */
 
     wifi_set_event_handler_cb(wifi_callback);
 
     system_os_task(user_procTask, 0, user_procTaskQueue, 1);
+    system_os_post(0, 0, 0);
 }
 
