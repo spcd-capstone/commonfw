@@ -5,59 +5,58 @@ clientListHead* cm_create_clientList() {
     clientListHead* r = (clientListHead*)os_malloc(sizeof(clientListHead));
     r->next = 0;
 
+    r->active_conn = 0;
     return r;
 }
 
 void cm_add_connection(clientListHead *head, struct espconn *conn) {
     // allocate new list item
-    clientList *newNode = (clientList*)os_malloc(sizeof(clientList));
+    clientListNode *newNode = (clientListNode*)os_malloc(sizeof(clientListNode));
 
     // copy all connection data into new node
-    os_memcpy(&(newNode->esp_conn), conn, sizeof(struct espconn));
+    os_memcpy(&newNode->remote_ip, conn->proto.tcp->remote_ip, 4);
+    newNode->remote_port = conn->proto.tcp->remote_port;
+    newNode->esp_conn = conn;
 
     // insert new node at begining of list
     newNode->next = head->next;
     head->next = newNode;
 }
 
-bool compare_connections(struct espconn *fst, struct espconn *snd) {
-    if (fst == snd)
-        return true;
-    if (fst == 0 || snd == 0)
-        return false;
-    if (fst->type == snd->type && fst->state == snd->state) {
-        if (fst->type == ESPCONN_TCP) {
-            esp_tcp *c1 = fst->proto.tcp;
-            esp_tcp *c2 = snd->proto.tcp;
-            if (c1->remote_port == c2->remote_port
-                    && c1->local_port == c2->local_port
-                    && c1->remote_ip[0] == c2->remote_ip[0]
-                    && c1->remote_ip[1] == c2->remote_ip[1]
-                    && c1->remote_ip[2] == c2->remote_ip[2]
-                    && c1->remote_ip[3] == c2->remote_ip[3])
-                return true;
+bool cm_set_active_connection(clientListHead *head, struct espconn *conn) {
+    int port = conn->proto.tcp->remote_port;
+    uint32_t ip = 0;
+    os_memcpy(&ip, conn->proto.tcp->remote_ip, 4);
+
+    // find node
+    clientListNode *curr = head->next;
+    while (curr) {
+        if (curr->remote_port == port
+                && curr->remote_ip == ip) {
+            head->active_conn = curr;
+            return true;
         }
-        else if (fst->type == ESPCONN_UDP) {
-            esp_udp *c1 = fst->proto.udp;
-            esp_udp *c2 = snd->proto.udp;
-            if (c1->remote_port == c2->remote_port
-                    && c1->local_port == c2->local_port
-                    && c1->remote_ip[0] == c2->remote_ip[0]
-                    && c1->remote_ip[1] == c2->remote_ip[1]
-                    && c1->remote_ip[2] == c2->remote_ip[2]
-                    && c1->remote_ip[3] == c2->remote_ip[3])
-                return true;
-        }
+        curr = curr->next;
     }
+    // node not found
     return false;
 }
 
+clientListNode *cm_get_active_connection(clientListHead *head) {
+    return head->active_conn;
+}
+
 bool cm_remove_connection(clientListHead *head, struct espconn *conn) {
+    int port = conn->proto.tcp->remote_port;
+    uint32_t ip = 0;
+    os_memcpy(&ip, conn->proto.tcp->remote_ip, 4);
+
     // find node
-    clientList *prev = 0;
-    clientList *curr = head->next;
-    while (head) {
-        if (compare_connections(&(curr->esp_conn), conn)) {
+    clientListNode *prev = 0;
+    clientListNode *curr = head->next;
+    while (curr) {
+        if (curr->remote_port == port
+                && curr->remote_ip == ip) {
             if (prev == 0) {
                 head->next = curr->next;
             }

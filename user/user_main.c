@@ -9,8 +9,9 @@
 
 #include "client_manager.h"
 #include "parser.h"
+#include "response_parser.h"
+#include "uart.h"
 
-#define LISTENPORT 7777
 
 os_event_t    user_procTaskQueue[1];
 static void user_procTask(os_event_t *events);
@@ -21,10 +22,13 @@ struct espconn server_conn;
 clientListHead *client_list;
 esp_tcp server_tcp;
 parser *command_parser;
+rparser *response_parser;
 
 char update_buffer[64];
+char response_buffer[512];
+char uart_out_buffer[1024];
 
-void broadcast_timer_fn(void *arg) {
+void send_broadcast_packet() {
     struct ip_info station_ip;
     int stat = wifi_station_get_connect_status();
     if (stat != STATION_GOT_IP) {
@@ -59,6 +63,10 @@ void broadcast_timer_fn(void *arg) {
     espconn_delete(&conn);
 }
 
+void broadcast_timer_fn(void *arg) {
+    send_broadcast_packet();
+}
+
 void server_recv_cb(void *arg, char *pdata, unsigned short len) {
     struct espconn *pConn = (struct espconn *)arg;
 
@@ -77,23 +85,43 @@ void server_recv_cb(void *arg, char *pdata, unsigned short len) {
     if (pres == PR_SET_COMMAND) {
         pres = parser_process(command_parser, &parsedInt, parsedData, 512);
         if (pres == PR_KEY) {
-            if (!os_strcmp("ssid", parsedData)) {
+            if (!os_strcmp("wifi_ssid", parsedData)) {
+                char m[128];
+                char errmsg[] = "not yet implemented";
+                os_sprintf(m, "-%d:%s", strlen(errmsg), errmsg);
+                espconn_send(pConn, m, strlen(m));
+            }
+            else if (!os_strcmp("wifi_pass", parsedData)) {
+                char m[128];
+                char errmsg[] = "not yet implemented";
+                os_sprintf(m, "-%d:%s", strlen(errmsg), errmsg);
+                espconn_send(pConn, m, strlen(m));
+            }
+            else {
+                cm_set_active_connection(client_list, pConn)
+                os_printf("s%d:%s", os_strlen(parsedData), parsedData);
                 pres = parser_process(command_parser, &parsedInt, parsedData, 512);
                 if (pres == PR_VALUE_INT) {
-                    if (parsedInt) {
-                        // GPIO2 ON
-                        gpio_output_set(BIT2, 0, BIT2, 0);
-                    }
-                    else {
-                        // GPIO2 OFF
-                        gpio_output_set(0, BIT2, BIT2, 0);
-                    }
+                    os_printf("i%de", parsedInt);
+                }
+                else if (pres == PR_VALUE_STRING) {
+                    os_printf("%d:%s", os_strlen(parsedData), parsedData);
+                }
+                else {
+                    // error parsing, cancel command by sending crap value
+                    os_printf("x");
                 }
             }
         }
     }
     else if (pres == PR_GET_COMMAND) {
         // Message contained 'get' command
+        pres = parser_process(command_parser, &parsedInt, parsedData, 512);
+        if (pres == PR_KEY) {
+            // send command to uart
+            cm_set_active_connection(client_list, pConn)
+            os_printf("g%d:%s", os_strlen(parsedData), parsedData);
+        }
     }
 
     parser_reset(command_parser);
@@ -158,6 +186,9 @@ void start_server()
     os_timer_disarm(&broadcast_timer);
     os_timer_setfn(&broadcast_timer, &broadcast_timer_fn, 0);
     os_timer_arm(&broadcast_timer, BROADCAST_INTERVAL, 1);
+
+    // send initial broadcast packet
+    send_broadcast_packet();
 }
 
 void wifi_callback(System_Event_t *evt)
@@ -185,7 +216,7 @@ void wifi_callback(System_Event_t *evt)
 
         case EVENT_STAMODE_GOT_IP:
         {
-            os_printf("ip:" IPSTR ",mask:" IPSTR ",gw:" IPSTR "\n",
+            os_printf("ip=" IPSTR ",mask=" IPSTR ",gw=" IPSTR "\n",
                 IP2STR(&evt->event_info.got_ip.ip),
                 IP2STR(&evt->event_info.got_ip.mask),
                 IP2STR(&evt->event_info.got_ip.gw));
@@ -203,7 +234,22 @@ void wifi_callback(System_Event_t *evt)
 ICACHE_FLASH_ATTR
 static void user_procTask(os_event_t *events)
 {
-    os_delay_us(10);
+    // get incoming character
+    int c = uart0_rx_one_char();
+    if(c == -1) {
+        // not actually a character
+        return;
+    }
+
+    if (rparser_parse_char(response_parser, c) == RPR_READY) {
+        char *msg = rparser_get_msg(response_parser);
+        clientListNode* cl = cm_get_active_connection(client_list);
+
+        if (cl->esp_conn->state == ESPCONN_CONNECT) {
+            espconn_send(cl->esp_conn, msg, os_strlen(msg));
+        }
+        rparser_reset(response_parser);
+    }
 }
 
 ICACHE_FLASH_ATTR
@@ -214,19 +260,21 @@ void user_init(void)
     // initialize variables
     client_list = cm_create_clientList();
     command_parser = parser_create();
+    response_parser = rparser_create();
 
     // set up baud rate
-    uart_div_modify(0, UART_CLK_FREQ / (115200));
+    //uart_div_modify(0, UART_CLK_FREQ / (115200));
+    uart_init(BIT_RATE_57600, BIT_RATE_57600);
 
-    /*
-    // initialize GPIO
+    // config gpio
     gpio_init();
-    PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO2_U, FUNC_GPIO2);
-    gpio_output_set(0, BIT2, BIT2, 0);
-    */
+    PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO0_U, FUNC_GPIO0);
+    PIN_PULLUP_EN(PERIPHS_IO_MUX_GPIO0_U);
+
+    // set uart0 as default output for os_printf
 
     // set up wifi options
-    wifi_station_set_hostname("outlet");
+    wifi_station_set_hostname("haNode");
     wifi_set_opmode_current(STATION_MODE);
 
     config.bssid_set = 0;

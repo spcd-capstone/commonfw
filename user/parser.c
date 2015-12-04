@@ -63,7 +63,7 @@ parser_result parser_process(parser *p, int *parsedInt, char *parsedString, int 
     else if (p->state == PS_READY_FOR_SKEY) {
         p->partial_int = 0;
         get_result = rb_getchar(p->buffer, &c);
-        while (get_result == RB_OK && (c > '0' && c < '9')) {
+        while (get_result == RB_OK && (c >= '0' && c <= '9')) {
             p->partial_int *= 10;
             p->partial_int += c - '0';
             rb_code result = rb_getchar(p->buffer, &c);
@@ -83,7 +83,7 @@ parser_result parser_process(parser *p, int *parsedInt, char *parsedString, int 
         bool never_looped = true;
         p->partial_int = 0;
         get_result = rb_getchar(p->buffer, &c);
-        while (get_result == RB_OK && (c > '0' && c < '9')) {
+        while (get_result == RB_OK && (c >= '0' && c <= '9')) {
             never_looped = false;
             p->partial_int *= 10;
             p->partial_int += c - '0';
@@ -119,7 +119,7 @@ parser_result parser_process(parser *p, int *parsedInt, char *parsedString, int 
     else if (p->state == PS_READY_FOR_GKEY) {
         p->partial_int = 0;
         get_result = rb_getchar(p->buffer, &c);
-        while (get_result == RB_OK && (c > '0' && c < '9')) {
+        while (get_result == RB_OK && (c >= '0' && c <= '9')) {
             p->partial_int *= 10;
             p->partial_int += c - '0';
             rb_code result = rb_getchar(p->buffer, &c);
