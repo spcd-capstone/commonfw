@@ -98,7 +98,7 @@ void server_recv_cb(void *arg, char *pdata, unsigned short len) {
                 espconn_send(pConn, m, strlen(m));
             }
             else {
-                cm_set_active_connection(client_list, pConn)
+                cm_set_active_connection(client_list, pConn);
                 os_printf("s%d:%s", os_strlen(parsedData), parsedData);
                 pres = parser_process(command_parser, &parsedInt, parsedData, 512);
                 if (pres == PR_VALUE_INT) {
@@ -119,7 +119,7 @@ void server_recv_cb(void *arg, char *pdata, unsigned short len) {
         pres = parser_process(command_parser, &parsedInt, parsedData, 512);
         if (pres == PR_KEY) {
             // send command to uart
-            cm_set_active_connection(client_list, pConn)
+            cm_set_active_connection(client_list, pConn);
             os_printf("g%d:%s", os_strlen(parsedData), parsedData);
         }
     }
