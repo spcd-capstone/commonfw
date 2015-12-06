@@ -97,31 +97,44 @@ void server_recv_cb(void *arg, char *pdata, unsigned short len) {
                 os_sprintf(m, "-%d:%s", strlen(errmsg), errmsg);
                 espconn_send(pConn, m, strlen(m));
             }
-            else {
-                cm_set_active_connection(client_list, pConn);
-                os_printf("s%d:%s", os_strlen(parsedData), parsedData);
+            else if (!os_strcmp("on", parsedData)) {
                 pres = parser_process(command_parser, &parsedInt, parsedData, 512);
                 if (pres == PR_VALUE_INT) {
-                    os_printf("i%de", parsedInt);
-                }
-                else if (pres == PR_VALUE_STRING) {
-                    os_printf("%d:%s", os_strlen(parsedData), parsedData);
+                    if (parsedInt) {
+                        // set GPIO high
+                        gpio_output_set(BIT2, 0, BIT2, 0);
+                    }
+                    else {
+                        // set GPIO low
+                        gpio_output_set(0, BIT2, BIT2, 0);
+                    }
+                    char* msg = "+i0e";
+                    espconn_send(pConn, msg, os_strlen(msg));
                 }
                 else {
-                    // error parsing, cancel command by sending crap value
-                    os_printf("x");
+                    // error
+                    char *msg = "'on' only accepts integer values";
+                    char buffer[64];
+                    os_sprintf(buffer, "-%d:%s", os_strlen(msg), msg);
+                    espconn_send(pConn, msg, os_strlen(msg));
                 }
+            }
+            else {
+                // not a supported key
+                char *msg = "cannot set value for that key";
+                char buffer[64];
+                os_sprintf(buffer, "-%d:%s", os_strlen(msg), msg);
+                espconn_send(pConn, msg, os_strlen(msg));
             }
         }
     }
     else if (pres == PR_GET_COMMAND) {
         // Message contained 'get' command
-        pres = parser_process(command_parser, &parsedInt, parsedData, 512);
-        if (pres == PR_KEY) {
-            // send command to uart
-            cm_set_active_connection(client_list, pConn);
-            os_printf("g%d:%s", os_strlen(parsedData), parsedData);
-        }
+        // there are no values to get for an toggle node
+        char *msg = "cannot get value for that key";
+        char buffer[64];
+        os_sprintf(buffer, "-%d:%s", os_strlen(msg), msg);
+        espconn_send(pConn, msg, os_strlen(msg));
     }
 
     parser_reset(command_parser);
@@ -270,6 +283,10 @@ void user_init(void)
     gpio_init();
     PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO0_U, FUNC_GPIO0);
     PIN_PULLUP_EN(PERIPHS_IO_MUX_GPIO0_U);
+
+    // for output pin
+    PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO2_U, FUNC_GPIO2);
+    gpio_output_set(0, BIT2, BIT2, 0);
 
     // set uart0 as default output for os_printf
 
